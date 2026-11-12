@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video comparison study</title>
+<!--
+SETUP
+1. Put A.mp4, ours.mp4, chronogs.mp4, 4dgs.mp4 and swift4d.mp4
+   under videos/<scene>/ (same length, resolution, encoding;
+   H.264 + faststart: ffmpeg -i in.mp4 -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart -an out.mp4).
+2. Fill CONFIG below: ENDPOINT (Google Apps Script web app URL, see collect.gs),
+   COMPLETION_CODE (Prolific), SCENES, BASELINES, attention checks.
+3. Host the folder on GitHub Pages (Settings -> Pages). Prolific study URL:
+   https://<you>.github.io/<repo>/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+4. Replace the consent text with your IRB-approved text before launch.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* Neutral mid-grey surround around the videos, as in subjective video-quality
+     testing, so the page itself doesn't tint how people judge colour and contrast. */
+  :root {
+    --surround: #808080;
+    --panel: #f3f3f3;
+    --ink: #1c1c1c;
+    --ink-soft: #4a4a4a;
+    --line: #c9c9c9;
+    --pick: #1f5fbf;
+    --pick-ink: #ffffff;
+    --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surround: #5e5e5e;
+      --panel: #262626;
+      --ink: #ededed;
+      --ink-soft: #b8b8b8;
+      --line: #444444;
+      --pick: #5b8fe0;
+      --pick-ink: #0d0d0d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--surround); color: var(--ink); font: 17px/1.55 var(--font); }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
+  .panel { background: var(--panel); border-radius: 6px; padding: 24px 28px; max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 12px; }
+  h2 { font-size: 1.15rem; margin: 20px 0 6px; }
+  p, li { max-width: 70ch; }
+  .muted { color: var(--ink-soft); }
+  button { font: inherit; cursor: pointer; }
+  .primary { background: var(--pick); color: var(--pick-ink); border: 0; border-radius: 4px; padding: 10px 20px; }
+  .primary:disabled { opacity: .45; cursor: not-allowed; }
+  .ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 6px 14px; }
+  :focus-visible { outline: 3px solid var(--pick); outline-offset: 2px; }
+
+  .progress { color: var(--panel); font-size: .95rem; margin-bottom: 10px; text-align: center; }
+  .ref { width: min(560px, 100%); margin: 0 auto 6px; }
+  .ref-label, .vid-label { color: var(--panel); text-align: center; font-size: .95rem; margin: 4px 0 0; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+  @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+  video { width: 100%; display: block; background: #000; border-radius: 3px; }
+  .controls { display: flex; gap: 10px; justify-content: center; margin: 12px 0 18px; }
+  .controls .ghost { color: var(--panel); border-color: var(--panel); }
+
+  .questions { background: var(--panel); border-radius: 6px; padding: 8px 20px 20px; }
+  .q { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .q:last-of-type { border-bottom: 0; }
+  @media (max-width: 720px) { .q { grid-template-columns: 1fr; } }
+  .choices { display: flex; gap: 8px; }
+  .choice { background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 8px 16px; min-width: 96px; }
+  .choice[aria-checked="true"] { background: var(--pick); color: var(--pick-ink); border-color: var(--pick); }
+  .footer { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 12px; flex-wrap: wrap; }
+  .hint { color: var(--ink-soft); font-size: .95rem; margin: 0; }
+  .code { font-size: 1.4rem; font-weight: 700; letter-spacing: .04em; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<script>
+/* ===================== CONFIG (edit this) ===================== */
+const CONFIG = {
+  ENDPOINT: "https://script.google.com/macros/s/AKfycbxfQL8DMfghz45tYTDJkZn86rsx4qGALPC6Yb7DMN23gnpBx2P8aLU36rMEmuGduE8I/exec",
+  COMPLETION_CODE: "PASTE_PROLIFIC_CODE_HERE",
+  OURS: "ours",
+  // Scenes in the study. Each needs videos/<scene>/A.mp4 (reference input) and one file per method.
+  SCENES: ["building", "corner_building", "country_house_v2", "town_house", "forest_cabin",
+           "pavilion", "garden", "ruin", "quay_tower_crop", "house_construction_knott"],
+  // Three baselines compared against ours in each scene (file names without .mp4).
+  BASELINES: ["chronogs", "4dgs", "swift4d"],
+  // One practice pair shown first, not recorded as data.
+  PRACTICE: { scene: "building", a: "chronogs", b: "ours" },
+  // Attention checks: "good" vs an obviously degraded copy (e.g. heavy blur). Expected answer = good.
+  CHECKS: [
+    { scene: "garden", good: "ours", bad: "check_blurred" },
+    { scene: "pavilion", good: "ours", bad: "check_blurred" },
+  ],
+  QUESTIONS: [
+    { key: "artifacts", text: "Which video has fewer visual errors, such as ghosting, floating blobs or smearing?" },
+    { key: "stability", text: "In which video does the unchanging background stay more stable, without flickering or jumping?" },
+    { key: "geometry",  text: "As the camera moves, in which video do the buildings keep a more solid, believable shape?" },
+    { key: "faithful",  text: "Which video better matches the scene and construction in the reference video?" },
+  ],
+  CHECK_KEY: "artifacts",   // question used to score attention checks
+};
+const src = (scene, method) => `videos/${scene}/${method}.mp4`;
+/* ============================================================== */
+
+const params = new URLSearchParams(location.search);
+const PID = params.get("PROLIFIC_PID") || "anon-" + Math.random().toString(36).slice(2, 10);
+const SESSION = params.get("SESSION_ID") || "";
+const app = document.getElementById("app");
+
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function sides(x, y) { return Math.random() < 0.5 ? [x, y] : [y, x]; }
+
+function buildTrials() {
+  const main = [];
+  for (const scene of CONFIG.SCENES) for (const b of CONFIG.BASELINES) {
+    const [L, R] = sides(CONFIG.OURS, b);
+    main.push({ id: `${scene}__${b}`, scene, kind: "main", left: L, right: R });
+  }
+  shuffle(main);
+  const checks = CONFIG.CHECKS.map((c, i) => {
+    const [L, R] = sides(c.good, c.bad);
+    return { id: `check${i}__${c.scene}`, scene: c.scene, kind: "check", left: L, right: R, good: c.good };
+  });
+  // spread checks evenly through the session
+  checks.forEach((c, i) => main.splice(Math.round((i + 1) * main.length / (checks.length + 1)), 0, c));
+  return main;
+}
+
+const state = { trials: buildTrials(), idx: 0, started: Date.now() };
+
+function send(row) {
+  if (!CONFIG.ENDPOINT.startsWith("http")) { console.log("ROW (no endpoint set)", row); return; }
+  fetch(CONFIG.ENDPOINT, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(row) })
+    .catch(err => console.error("send failed", err));
+}
+
+/* ---------------- screens ---------------- */
+function consent() {
+  app.innerHTML = `
+    <section class="panel">
+      <h1>Comparing videos of changing scenes</h1>
+      <p>You’ll watch pairs of short videos and choose which one looks better on a few questions. It takes about 15–20 minutes. There are no right or wrong answers, except for a few simple check questions.</p>
+      <h2>Consent</h2>
+      <p class="muted">[Replace with your IRB-approved consent text: purpose, duration, risks, anonymity, voluntary participation, contact.]</p>
+      <p><label><input type="checkbox" id="agree"> I have read the information above and agree to take part.</label></p>
+      <button class="primary" id="go" disabled>Continue</button>
+    </section>`;
+  const agree = document.getElementById("agree"), go = document.getElementById("go");
+  agree.onchange = () => go.disabled = !agree.checked;
+  go.onclick = instructions;
+}
+
+function instructions() {
+  app.innerHTML = `
+    <section class="panel">
+      <h1>How it works</h1>
+      <p>Each screen shows a short reference video at the top: a real or simulated time-lapse filmed from one fixed spot. Below it are two videos made from that reference. In both, the camera slowly moves to new viewpoints while time passes.</p>
+      <p>Watch both videos at least once (they play together and loop), then answer four questions by choosing Video 1 or Video 2. Pick the better one even if the difference is small.</p>
+      <h2>What the questions mean</h2>
+      <ul>
+        <li><strong>Visual errors:</strong> parts that look doubled, see-through, smeared, or blobs floating in the air.</li>
+        <li><strong>Stable background:</strong> things that shouldn’t change, like other houses or the street, stay steady instead of flickering or jumping.</li>
+        <li><strong>Solid shape:</strong> as the view moves, buildings keep a believable 3D shape instead of bending or stretching.</li>
+        <li><strong>Matches the reference:</strong> the scene and the construction look like what happens in the reference video.</li>
+      </ul>
+      <p>Next is one practice pair. It isn’t recorded.</p>
+      <button class="primary" id="go">Start practice</button>
+    </section>`;
+  document.getElementById("go").onclick = () => {
+    const p = CONFIG.PRACTICE, [L, R] = sides(p.a, p.b);
+    trialScreen({ id: "practice", scene: p.scene, kind: "practice", left: L, right: R }, null);
+  };
+}
+
+function trialScreen(trial, number) {
+  const total = state.trials.length;
+  const label = number === null ? "Practice" : `Pair ${number} of ${total}`;
+  app.innerHTML = `
+    <p class="progress">${label}</p>
+    <div class="ref">
+      <video id="vref" src="${src(trial.scene, "A")}" muted playsinline preload="auto"></video>
+      <p class="ref-label">Reference</p>
+    </div>
+    <div class="pair">
+      <div><video id="v1" src="${src(trial.scene, trial.left)}" muted playsinline preload="auto"></video><p class="vid-label">Video 1</p></div>
+      <div><video id="v2" src="${src(trial.scene, trial.right)}" muted playsinline preload="auto"></video><p class="vid-label">Video 2</p></div>
+    </div>
+    <div class="controls">
+      <button class="ghost" id="replay">Replay from start</button>
+      <button class="ghost" id="pause">Pause</button>
+    </div>
+    <section class="questions">
+      ${CONFIG.QUESTIONS.map(q => `
+        <div class="q" role="radiogroup" aria-label="${q.text}">
+          <span>${q.text}</span>
+          <div class="choices">
+            <button class="choice" role="radio" aria-checked="false" data-q="${q.key}" data-side="left">Video 1</button>
+            <button class="choice" role="radio" aria-checked="false" data-q="${q.key}" data-side="right">Video 2</button>
+          </div>
+        </div>`).join("")}
+      <div class="footer">
+        <p class="hint" id="hint">Watch both videos to the end once to unlock your answers.</p>
+        <button class="primary" id="next" disabled>${number === null ? "Start the study" : "Next pair"}</button>
+      </div>
+    </section>`;
+
+  const vids = ["vref", "v1", "v2"].map(id => document.getElementById(id));
+  const answers = {};
+  let watched = false, plays = 0;
+  const t0 = performance.now();
+  const choiceBtns = [...app.querySelectorAll(".choice")];
+  const next = document.getElementById("next"), hint = document.getElementById("hint");
+  choiceBtns.forEach(b => b.disabled = true);
+
+  // play all three in sync; when the first one ends, restart all together
+  function restart() { vids.forEach(v => { v.currentTime = 0; }); Promise.all(vids.map(v => v.play().catch(() => {}))); }
+  let readyCount = 0;
+  vids.forEach(v => {
+    v.addEventListener("canplaythrough", () => { if (++readyCount === vids.length) restart(); }, { once: true });
+    v.addEventListener("ended", () => {
+      if (v !== vids[1] && v !== vids[2]) return;      // the compared pair drives the loop
+      plays++;
+      if (!watched) { watched = true; choiceBtns.forEach(b => b.disabled = false); hint.textContent = "Answer all four questions to continue. The videos keep looping."; }
+      restart();
+    });
+  });
+  document.getElementById("replay").onclick = restart;
+  const pauseBtn = document.getElementById("pause");
+  pauseBtn.onclick = () => {
+    const paused = vids[1].paused;
+    vids.forEach(v => paused ? v.play() : v.pause());
+    pauseBtn.textContent = paused ? "Pause" : "Play";
+  };
+
+  choiceBtns.forEach(b => b.onclick = () => {
+    const q = b.dataset.q;
+    choiceBtns.filter(x => x.dataset.q === q).forEach(x => x.setAttribute("aria-checked", x === b ? "true" : "false"));
+    answers[q] = b.dataset.side;
+    next.disabled = Object.keys(answers).length < CONFIG.QUESTIONS.length;
+  });
+
+  next.onclick = () => {
+    vids.forEach(v => v.pause());
+    if (trial.kind !== "practice") {
+      const chosen = {};
+      for (const q of CONFIG.QUESTIONS) chosen[q.key] = answers[q.key] === "left" ? trial.left : trial.right;
+      send({
+        pid: PID, session: SESSION, trial_index: number, trial_id: trial.id, scene: trial.scene, kind: trial.kind,
+        left_method: trial.left, right_method: trial.right, ...Object.fromEntries(CONFIG.QUESTIONS.map(q => ["q_" + q.key, chosen[q.key]])),
+        check_passed: trial.kind === "check" ? chosen[CONFIG.CHECK_KEY] === trial.good : "",
+        rt_ms: Math.round(performance.now() - t0), plays, user_agent: navigator.userAgent,
+      });
+    }
+    if (number === null) { state.idx = 0; return showTrial(); }
+    state.idx++;
+    state.idx < state.trials.length ? showTrial() : done();
+  };
+}
+
+function showTrial() { window.scrollTo(0, 0); trialScreen(state.trials[state.idx], state.idx + 1); }
+
+function done() {
+  send({ pid: PID, session: SESSION, trial_index: "", trial_id: "_complete", kind: "complete",
+         rt_ms: Date.now() - state.started, user_agent: navigator.userAgent });
+  app.innerHTML = `
+    <section class="panel">
+      <h1>Thank you, you’re done</h1>
+      <p>Your answers have been recorded. Your completion code is:</p>
+      <p class="code">${CONFIG.COMPLETION_CODE}</p>
+      <p class="muted">Enter it on Prolific to finish, then you can close this tab.</p>
+    </section>`;
+}
+
+consent();
+</script>
+</body>
+</html>

@@ -8,10 +8,9 @@
 SETUP (see README.md)
 1. Videos are in videos/<scene>/{A,ours,chronogs,4dgs,swift4d}.mp4 for all 8 scenes (H.264, faststart, no audio, all 8.17 s;
    A = the real input time-lapse at 6 fps so it stays in sync with the 24 fps sweeps).
-2. Fill CONFIG below: COMPLETION_CODE (Prolific). ENDPOINT is your Google Apps Script web app (collect.gs).
+2. ENDPOINT in CONFIG is your Google Apps Script web app (collect.gs).
 3. Host the folder on GitHub Pages (Settings -> Pages). Prolific study URL:
    https://<you>.github.io/<repo>/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
-4. Replace the consent text with your IRB-approved text before launch.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -85,7 +84,6 @@ SETUP (see README.md)
 /* ===================== CONFIG (edit this) ===================== */
 const CONFIG = {
   ENDPOINT: "https://script.google.com/macros/s/AKfycbxfQL8DMfghz45tYTDJkZn86rsx4qGALPC6Yb7DMN23gnpBx2P8aLU36rMEmuGduE8I/exec",
-  COMPLETION_CODE: "PASTE_PROLIFIC_CODE_HERE",
   OURS: "ours",
   // Scenes in the study (videos for all 8 are in videos/): house_build, framing_house, huntington_apartments, metricon_home,
   // lexington_pool, snow_melt, house_rebuild, fly_agaric_moss. Do not list the PRACTICE scene here.
@@ -98,10 +96,10 @@ const CONFIG = {
   // Recorded with kind "catch" and check_passed true/false; filter participants who fail it.
   CATCH: { scene: "snow_melt", a: "4dgs", b: "swift4d" },
   QUESTIONS: [
-    { key: "artifacts", text: "Which video has fewer visual errors, such as ghosting, floating blobs or smearing?" },
-    { key: "stability", text: "In which video does the unchanging background stay more stable, without flickering or jumping?" },
-    { key: "geometry",  text: "As the camera moves, in which video do the buildings keep a more solid, believable shape?" },
-    { key: "faithful",  text: "Which video better matches the scene and construction in the reference video?" },
+    { key: "artifacts", text: "Which video has fewer visual errors, such as ghosting, floating blobs, smearing or see-through parts?" },
+    { key: "temporal",  text: "Which video is more consistent over time: things change smoothly and believably, without flickering, popping or jumping?" },
+    { key: "spatial",   text: "As the camera moves, in which video does the scene keep a more solid, consistent 3D shape, without bending, stretching or changing with the viewpoint?" },
+    { key: "faithful",  text: "Which video better follows the reference video: the same scene, and the same construction progress at each moment?" },
   ],
 };
 const src = (scene, method) => `videos/${scene}/${method}.mp4`;
@@ -147,14 +145,9 @@ function consent() {
     <section class="panel">
       <h1>Comparing videos of changing scenes</h1>
       <p>You’ll watch ${n} pairs of short videos and choose which one looks better on four questions. There are no right or wrong answers.</p>
-      <h2>Consent</h2>
-      <p class="muted">[Replace with your IRB-approved consent text: purpose, duration, risks, anonymity, voluntary participation, contact.]</p>
-      <p><label><input type="checkbox" id="agree"> I have read the information above and agree to take part.</label></p>
-      <button class="primary" id="go" disabled>Continue</button>
+      <button class="primary" id="go">Continue</button>
     </section>`;
-  const agree = document.getElementById("agree"), go = document.getElementById("go");
-  agree.onchange = () => go.disabled = !agree.checked;
-  go.onclick = instructions;
+  document.getElementById("go").onclick = instructions;
 }
 
 function instructions() {
@@ -166,9 +159,9 @@ function instructions() {
       <h2>What the questions mean</h2>
       <ul>
         <li><strong>Visual errors:</strong> parts that look doubled, see-through, smeared, or blobs floating in the air.</li>
-        <li><strong>Stable background:</strong> things that shouldn’t change, like other houses or the street, stay steady instead of flickering or jumping.</li>
-        <li><strong>Solid shape:</strong> as the view moves, buildings keep a believable 3D shape instead of bending or stretching.</li>
-        <li><strong>Matches the reference:</strong> the scene and the construction look like what happens in the reference video.</li>
+        <li><strong>Consistent over time:</strong> the construction is supposed to change, but it should change smoothly and believably; things that shouldn’t change stay steady instead of flickering, popping in and out, or jumping.</li>
+        <li><strong>Consistent in 3D:</strong> as the camera moves, the scene keeps one solid 3D shape instead of bending, stretching, or looking different from each viewpoint.</li>
+        <li><strong>Follows the reference:</strong> it shows the same scene as the reference, with the construction at the same stage at the same moment.</li>
       </ul>
       <p>Some screens may include an instruction; please read each screen carefully. Next is one practice pair. It isn’t recorded.</p>
       <button class="primary" id="go">Start practice</button>
@@ -279,9 +272,7 @@ function done() {
   app.innerHTML = `
     <section class="panel">
       <h1>Thank you, you’re done</h1>
-      <p>Your answers have been recorded. Your completion code is:</p>
-      <p class="code">${CONFIG.COMPLETION_CODE}</p>
-      <p class="muted">Enter it on Prolific to finish, then you can close this tab.</p>
+      <p>Your answers have been recorded. You can close this tab.</p>
     </section>`;
 }
 

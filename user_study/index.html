@@ -85,16 +85,18 @@ SETUP (see README.md)
 const CONFIG = {
   ENDPOINT: "https://script.google.com/macros/s/AKfycbxfQL8DMfghz45tYTDJkZn86rsx4qGALPC6Yb7DMN23gnpBx2P8aLU36rMEmuGduE8I/exec",
   OURS: "ours",
-  // Scenes in the study (videos for all 8 are in videos/): house_build, framing_house, huntington_apartments, metricon_home,
-  // lexington_pool, snow_melt, house_rebuild, fly_agaric_moss. Do not list the PRACTICE scene here.
-  SCENES: ["house_build", "framing_house", "huntington_apartments", "metricon_home"],
+  // Scene pool (videos for all 8 are in videos/). Each participant gets SCENES_PER_PARTICIPANT of them at random, with all
+  // BASELINES compared against ours in each: 5 scenes x 3 baselines = 15 pairs.
+  SCENES: ["house_build", "framing_house", "huntington_apartments", "metricon_home",
+           "lexington_pool", "snow_melt", "house_rebuild", "fly_agaric_moss"],
+  SCENES_PER_PARTICIPANT: 5,
   // Baselines compared against ours in each scene (file names without .mp4).
   BASELINES: ["chronogs", "4dgs", "swift4d"],
-  // One practice pair shown first, not recorded: two baselines (a pair we never analyse), in a scene that is NOT in SCENES.
-  PRACTICE: { scene: "lexington_pool", a: "chronogs", b: "4dgs" },
-  // Attention check: one extra pair at a random position with an on-screen instruction to pick Video 2 for every question.
-  // Recorded with kind "catch" and check_passed true/false; filter participants who fail it.
-  CATCH: { scene: "snow_melt", a: "4dgs", b: "swift4d" },
+  // One practice pair shown first, not recorded: two baselines (a pair we never analyse), in a random scene that this
+  // participant does NOT get in the study, so no scene is seen twice.
+  PRACTICE: { a: "chronogs", b: "4dgs" },
+  // Attention check: off (user 2026-11-13: the study is short). Set to { scene, a, b } to add an instructed-response pair.
+  CATCH: null,
   QUESTIONS: [
     { key: "artifacts", text: "Which video has fewer visual errors, such as ghosting, floating blobs, smearing or see-through parts?" },
     { key: "temporal",  text: "Which video is more consistent over time: things change smoothly and believably, without flickering, popping or jumping?" },
@@ -113,9 +115,13 @@ const app = document.getElementById("app");
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function sides(x, y) { return Math.random() < 0.5 ? [x, y] : [y, x]; }
 
+const POOL = shuffle([...CONFIG.SCENES]);
+const MY_SCENES = POOL.slice(0, CONFIG.SCENES_PER_PARTICIPANT);              // this participant's scenes
+const PRACTICE_SCENE = POOL[CONFIG.SCENES_PER_PARTICIPANT] || POOL[0];        // a scene they do not get in the study
+
 function buildTrials() {
   const main = [];
-  for (const scene of CONFIG.SCENES) for (const b of CONFIG.BASELINES) {
+  for (const scene of MY_SCENES) for (const b of CONFIG.BASELINES) {
     const [L, R] = sides(CONFIG.OURS, b);
     main.push({ id: `${scene}__${b}`, scene, kind: "main", left: L, right: R });
   }
@@ -155,7 +161,7 @@ function instructions() {
     <section class="panel">
       <h1>How it works</h1>
       <p>Each screen shows a short reference video at the top: the real input time-lapse filmed from a fixed camera. Below it are two videos made from that reference. In both, the camera slowly moves to new viewpoints while time passes.</p>
-      <p>Watch both videos at least once (they play together and loop), then answer four questions by choosing Video 1 or Video 2. Pick the better one even if the difference is small.</p>
+      <p>Watch both videos at least once (they play together and loop), then answer four questions by choosing Video 1 or Video 2. Pick the better one even if the difference is small. You can switch the playback speed between 1× and 2× at any time.</p>
       <h2>What the questions mean</h2>
       <ul>
         <li><strong>Visual errors:</strong> parts that look doubled, see-through, smeared, or blobs floating in the air.</li>
@@ -163,12 +169,12 @@ function instructions() {
         <li><strong>Consistent in 3D:</strong> as the camera moves, the scene keeps one solid 3D shape instead of bending, stretching, or looking different from each viewpoint.</li>
         <li><strong>Follows the reference:</strong> it shows the same scene as the reference, with the construction at the same stage at the same moment.</li>
       </ul>
-      <p>Some screens may include an instruction; please read each screen carefully. Next is one practice pair. It isn’t recorded.</p>
+      <p>Next is one practice pair. It isn’t recorded.</p>
       <button class="primary" id="go">Start practice</button>
     </section>`;
   document.getElementById("go").onclick = () => {
     const p = CONFIG.PRACTICE, [L, R] = sides(p.a, p.b);
-    trialScreen({ id: "practice", scene: p.scene, kind: "practice", left: L, right: R }, null);
+    trialScreen({ id: "practice", scene: PRACTICE_SCENE, kind: "practice", left: L, right: R }, null);
   };
 }
 
@@ -191,6 +197,7 @@ function trialScreen(trial, number) {
     <div class="controls">
       <button class="ghost" id="replay">Replay from start</button>
       <button class="ghost" id="pause">Pause</button>
+      <button class="ghost" id="speed">Speed: 1×</button>
     </div>
     <section class="questions">
       ${CONFIG.QUESTIONS.map(q => `
@@ -215,8 +222,14 @@ function trialScreen(trial, number) {
   const next = document.getElementById("next"), hint = document.getElementById("hint");
   choiceBtns.forEach(b => b.disabled = true);
 
+  // playback speed: natural speed by default, 2x on request; applied to all three so they stay in sync (logged per pair)
+  let rate = state.rate || 1, maxRate = rate;
+  const speedBtn = document.getElementById("speed");
+  function applyRate() { vids.forEach(v => { v.playbackRate = rate; }); speedBtn.textContent = `Speed: ${rate}×`; }
+  speedBtn.onclick = () => { rate = rate === 1 ? 2 : 1; state.rate = rate; maxRate = Math.max(maxRate, rate); applyRate(); };
+  applyRate();
   // play all three in sync; when the compared pair ends, restart all together
-  function restart() { vids.forEach(v => { v.currentTime = 0; }); Promise.all(vids.map(v => v.play().catch(() => {}))); }
+  function restart() { vids.forEach(v => { v.currentTime = 0; v.playbackRate = rate; }); Promise.all(vids.map(v => v.play().catch(() => {}))); }
   // start once all three can play through; the 4 s fallback covers events that fired before the listener was attached
   function tryStart() { if (!started && vids.every(v => v.readyState >= 4)) { started = true; restart(); } }
   vids.forEach(v => v.addEventListener("canplaythrough", tryStart));
@@ -255,7 +268,7 @@ function trialScreen(trial, number) {
         pid: PID, session: SESSION, trial_index: number, trial_id: trial.id, scene: trial.scene, kind: trial.kind,
         left_method: trial.left, right_method: trial.right, ...Object.fromEntries(CONFIG.QUESTIONS.map(q => ["q_" + q.key, chosen[q.key]])),
         check_passed: check,
-        rt_ms: Math.round(performance.now() - t0), plays, user_agent: navigator.userAgent,
+        rt_ms: Math.round(performance.now() - t0), plays, speed_end: rate, speed_max: maxRate, user_agent: navigator.userAgent,
       });
     }
     if (number === null) { state.idx = 0; return showTrial(); }

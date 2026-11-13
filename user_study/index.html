@@ -99,7 +99,7 @@ const CONFIG = {
   CATCH: null,
   QUESTIONS: [
     { key: "artifacts", text: "Which video has fewer visual errors, such as ghosting, floating blobs, smearing or see-through parts?" },
-    { key: "temporal",  text: "Which video is more consistent over time: things change smoothly and believably, without flickering, popping or jumping?" },
+    { key: "temporal",  text: "Over time, in which video do the changes look more like real construction, with clear, solid structures instead of flickering, fading, blending or things appearing out of nowhere?" },
     { key: "spatial",   text: "As the camera moves, in which video does the scene keep a more solid, consistent 3D shape, without bending, stretching or changing with the viewpoint?" },
     { key: "faithful",  text: "Which video better follows the reference video: the same scene, and the same construction progress at each moment?" },
   ],
@@ -165,7 +165,7 @@ function instructions() {
       <h2>What the questions mean</h2>
       <ul>
         <li><strong>Visual errors:</strong> parts that look doubled, see-through, smeared, or blobs floating in the air.</li>
-        <li><strong>Consistent over time:</strong> the construction is supposed to change, but it should change smoothly and believably; things that shouldn’t change stay steady instead of flickering, popping in and out, or jumping.</li>
+        <li><strong>Consistent over time:</strong> these are time-lapses, so the construction changes in jumps, as in the reference. Judge whether each change looks like real construction: structures should be clear and solid at every moment, not flicker, fade in and out, blend into each other, or appear from nowhere.</li>
         <li><strong>Consistent in 3D:</strong> as the camera moves, the scene keeps one solid 3D shape instead of bending, stretching, or looking different from each viewpoint.</li>
         <li><strong>Follows the reference:</strong> it shows the same scene as the reference, with the construction at the same stage at the same moment.</li>
       </ul>

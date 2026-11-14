@@ -8,15 +8,25 @@
 
 const BASE = ["received_at", "pid", "session", "trial_index", "trial_id", "scene", "kind", "left_method", "right_method"];
 
+// 2026-11-14: the page now saves rows with GET ?action=save&row=<json> (see doGet) and waits for {"ok": true}; POST is kept
+// for old copies of the page. Both write through saveRow_.
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    saveRow_(e.postData.contents);
+    return ContentService.createTextOutput("ok");
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveRow_(raw) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName("responses") || ss.insertSheet("responses");
-    const row = JSON.parse(e.postData.contents);
+    const row = JSON.parse(raw);
     row.received_at = new Date().toISOString();
-    row.raw = e.postData.contents;
+    row.raw = raw;
 
     let header = sheet.getLastRow() === 0 ? [] : sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
     const keys = BASE.concat(Object.keys(row).filter(k => BASE.indexOf(k) < 0 && k !== "raw"), ["raw"]);
@@ -26,10 +36,6 @@ function doPost(e) {
       sheet.getRange(1, 1, 1, header.length).setValues([header]);
     }
     sheet.appendRow(header.map(c => (row[c] === undefined ? "" : row[c])));
-    return ContentService.createTextOutput("ok");
-  } finally {
-    lock.releaseLock();
-  }
 }
 
 // Balanced scene assignment (2026-11-13). The page calls GET ?action=assign&pid=P&n=5&scenes=a,b,...
@@ -41,6 +47,13 @@ const PENDING_MIN = 45;
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
+  if (p.action === "save") {   // one answer row; the page retries until it gets ok: true
+    const lk = LockService.getScriptLock();
+    lk.waitLock(20000);
+    try { saveRow_(String(p.row || "")); return json_({ ok: true }); }
+    catch (err) { return json_({ ok: false, error: String(err) }); }
+    finally { lk.releaseLock(); }
+  }
   if (p.action !== "assign") return json_({ ok: true });
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);

@@ -152,13 +152,36 @@ function buildTrials() {
 
 const state = { trials: [], idx: 0, started: Date.now() };   // trials are built after assignScenes()
 
+// 2026-11-14: rows are saved with the same kind of GET request as the scene assignment (collect.gs doGet action=save),
+// which answers {"ok": true}, so the page knows each row arrived. (sendBeacon could be dropped silently, e.g. by ad blockers:
+// two participants' answers never reached the sheet.) Unconfirmed rows stay in `pending`, are retried, and are sent before
+// any later row. A retry after a lost reply can duplicate a row: deduplicate on (pid, trial_id) in the analysis.
+const pending = [];
+let chain = Promise.resolve();
+async function saveOne(row) {
+  for (let a = 0; a < 3; a++) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const q = new URLSearchParams({ action: "save", row: JSON.stringify(row) });
+      const r = await (await fetch(`${CONFIG.ENDPOINT}?${q}`, { signal: ctl.signal })).json();
+      clearTimeout(timer);
+      if (r && r.ok) return true;
+    } catch (err) { clearTimeout(timer); console.warn("save failed, attempt", a + 1, err); }
+    await new Promise(res => setTimeout(res, 1500 * (a + 1)));
+  }
+  return false;
+}
+async function flush() {
+  while (pending.length) { if (!(await saveOne(pending[0]))) return false; pending.shift(); }
+  return true;
+}
+// send(row) queues the row (if given) and resolves true once everything queued so far is saved; calls run one at a time.
 function send(row) {
-  if (!CONFIG.ENDPOINT.startsWith("http")) { console.log("ROW (no endpoint set)", row); return; }
-  const body = JSON.stringify(row);
-  // sendBeacon survives the tab being closed right after the click; fall back to fetch with keepalive
-  if (navigator.sendBeacon && navigator.sendBeacon(CONFIG.ENDPOINT, new Blob([body], { type: "text/plain" }))) return;
-  fetch(CONFIG.ENDPOINT, { method: "POST", mode: "no-cors", keepalive: true, headers: { "Content-Type": "text/plain" }, body })
-    .catch(err => console.error("send failed", err));
+  if (!CONFIG.ENDPOINT.startsWith("http")) { if (row) console.log("ROW (no endpoint set)", row); return Promise.resolve(true); }
+  if (row) pending.push(row);
+  const p = chain.then(flush);
+  chain = p.catch(() => false);
+  return p;
 }
 
 /* ---------------- screens ---------------- */
@@ -178,7 +201,7 @@ function instructions() {
     <section class="panel">
       <h1>How it works</h1>
       <p>Each screen shows a short reference video at the top: the real input time-lapse filmed from a fixed camera. Below it are two videos made from that reference. In both, the camera slowly moves to new viewpoints while time passes.</p>
-      <p>Watch both videos at least once (they play together and loop), then answer four questions by choosing Video 1 or Video 2. Pick the better one even if the difference is small. You can switch the playback speed between 1× and 2× at any time.</p>
+      <p>Watch both videos (they play together and loop), then answer four questions by choosing Video 1 or Video 2. Pick the better one even if the difference is small. You can switch the playback speed between 1× and 2× at any time.</p>
       <h2>What the questions mean</h2>
       <ul>
         <li><strong>Visual errors:</strong> parts that look doubled, see-through, smeared, or blobs floating in the air.</li>
@@ -226,18 +249,17 @@ function trialScreen(trial, number) {
           </div>
         </div>`).join("")}
       <div class="footer">
-        <p class="hint" id="hint">Watch both videos to the end once to unlock your answers.</p>
+        <p class="hint" id="hint">Answer all four questions to continue. The videos keep looping.</p>
         <button class="primary" id="next" disabled>${number === null ? "Start the study" : "Next pair"}</button>
       </div>
     </section>`;
 
   const vids = ["vref", "v1", "v2"].map(id => document.getElementById(id));
   const answers = {};
-  let watched = false, plays = 0, started = false;
+  let watched = false, plays = 0, started = false, unlockedBy = "", videoErrors = 0;
   const t0 = performance.now();
   const choiceBtns = [...app.querySelectorAll(".choice")];
   const next = document.getElementById("next"), hint = document.getElementById("hint");
-  choiceBtns.forEach(b => b.disabled = true);
 
   // playback speed: natural speed by default, 2x on request; applied to all three so they stay in sync (logged per pair)
   let rate = state.rate || 1, maxRate = rate;
@@ -252,13 +274,20 @@ function trialScreen(trial, number) {
   vids.forEach(v => v.addEventListener("canplaythrough", tryStart));
   tryStart();
   setTimeout(() => { if (!started) { started = true; restart(); } }, 4000);
+  // 2026-11-14 (user): answers are open from the start (no need to watch to the end first). Whether the compared pair
+  // had played to the end before the answer is still logged: watched_end = "ended" | "end" (within 0.3 s of the end), "" = not yet.
+  function markWatched(by) { if (!watched) { watched = true; unlockedBy = by; } }
   vids.forEach(v => {
     v.addEventListener("ended", () => {
       if (v !== vids[1] && v !== vids[2]) return;      // the compared pair drives the loop
       plays++;
-      if (!watched) { watched = true; choiceBtns.forEach(b => b.disabled = false); hint.textContent = "Answer all four questions to continue. The videos keep looping."; }
+      markWatched("ended");
       restart();
     });
+    v.addEventListener("timeupdate", () => {
+      if ((v === vids[1] || v === vids[2]) && v.duration && v.currentTime >= v.duration - 0.3) markWatched("end");
+    });
+    v.addEventListener("error", () => { videoErrors++; hint.textContent = "A video could not be loaded. Please check your connection and reload the page."; });
   });
   document.getElementById("replay").onclick = restart;
   const pauseBtn = document.getElementById("pause");
@@ -275,40 +304,77 @@ function trialScreen(trial, number) {
     next.disabled = Object.keys(answers).length < CONFIG.QUESTIONS.length;
   });
 
-  next.onclick = () => {
-    vids.forEach(v => v.pause());
-    if (trial.kind !== "practice") {
-      const chosen = {};
-      for (const q of CONFIG.QUESTIONS) chosen[q.key] = answers[q.key] === "left" ? trial.left : trial.right;
-      const check = trial.kind === "catch" ? CONFIG.QUESTIONS.every(q => answers[q.key] === "right") : "";
-      send({
-        pid: PID, session: SESSION, trial_index: number, trial_id: trial.id, scene: trial.scene, kind: trial.kind,
-        left_method: trial.left, right_method: trial.right, ...Object.fromEntries(CONFIG.QUESTIONS.map(q => ["q_" + q.key, chosen[q.key]])),
-        check_passed: check, assign: ASSIGN,
-        rt_ms: Math.round(performance.now() - t0), plays, speed_end: rate, speed_max: maxRate, user_agent: navigator.userAgent,
-      });
-    }
+  function advance() {
     if (number === null) { state.idx = 0; return showTrial(); }
     state.idx++;
     state.idx < state.trials.length ? showTrial() : done();
+  }
+  let queued = false;
+  next.onclick = async () => {
+    vids.forEach(v => v.pause());
+    if (trial.kind !== "practice") {
+      if (!queued) {   // the row is built once; answers are frozen from here on
+        const chosen = {};
+        for (const q of CONFIG.QUESTIONS) chosen[q.key] = answers[q.key] === "left" ? trial.left : trial.right;
+        const check = trial.kind === "catch" ? CONFIG.QUESTIONS.every(q => answers[q.key] === "right") : "";
+        pending.push({
+          pid: PID, session: SESSION, trial_index: number, trial_id: trial.id, scene: trial.scene, kind: trial.kind,
+          left_method: trial.left, right_method: trial.right, ...Object.fromEntries(CONFIG.QUESTIONS.map(q => ["q_" + q.key, chosen[q.key]])),
+          check_passed: check, assign: ASSIGN,
+          rt_ms: Math.round(performance.now() - t0), plays, speed_end: rate, speed_max: maxRate, watched_end: unlockedBy,
+          video_errors: videoErrors, user_agent: navigator.userAgent,
+        });
+        queued = true; choiceBtns.forEach(b => b.disabled = true);
+      }
+      next.disabled = true; next.textContent = "Saving…";
+      if (!(await send(null))) {
+        next.disabled = false; next.textContent = "Try again";
+        hint.innerHTML = `Your answers could not be saved (connection problem, or a browser extension such as an ad blocker
+          blocking the request). Please click “Try again”; if it keeps failing, pause your ad blocker for this page.
+          <button class="ghost" id="skipsave">Continue anyway</button>`;
+        document.getElementById("skipsave").onclick = advance;   // the row stays queued and is retried with the next one
+        return;
+      }
+    }
+    advance();
   };
 }
 
 function showTrial() { window.scrollTo(0, 0); trialScreen(state.trials[state.idx], state.idx + 1); }
 
 function done() {
-  send({ pid: PID, session: SESSION, trial_index: "", trial_id: "_complete", kind: "complete", assign: ASSIGN,
-         scenes: MY_SCENES.join(","),
-         rt_ms: Date.now() - state.started, user_agent: navigator.userAgent });
+  pending.push({ pid: PID, session: SESSION, trial_index: "", trial_id: "_complete", kind: "complete", assign: ASSIGN,
+                 scenes: MY_SCENES.join(","), rt_ms: Date.now() - state.started, user_agent: navigator.userAgent });
+  finish();
+}
+async function finish() {   // the thank-you page only appears once every row is confirmed
+  app.innerHTML = `<section class="panel"><p>Saving your answers…</p></section>`;
+  if (await send(null)) {
+    app.innerHTML = `
+      <section class="panel">
+        <h1>Thank you, you’re done</h1>
+        <p>Your answers have been recorded. You can close this tab.</p>
+      </section>`;
+    return;
+  }
   app.innerHTML = `
     <section class="panel">
-      <h1>Thank you, you’re done</h1>
-      <p>Your answers have been recorded. You can close this tab.</p>
+      <h1>Almost done</h1>
+      <p>Some of your answers could not be saved yet (connection problem, or an ad blocker blocking the request).
+         Please keep this tab open and click “Try again”; if it keeps failing, pause your ad blocker for this page and try again.</p>
+      <button class="primary" id="retry">Try again</button>
     </section>`;
+  document.getElementById("retry").onclick = finish;
 }
 
 app.innerHTML = `<section class="panel"><p>Loading…</p></section>`;
-assignScenes().then(() => { state.trials = buildTrials(); consent(); });
+assignScenes().then(() => {
+  state.trials = buildTrials();
+  // 2026-11-14: a "start" row per participant, so the sheet shows who reached the study even if they stop early
+  send({ pid: PID, session: SESSION, trial_index: "", trial_id: "_start", kind: "start", assign: ASSIGN,
+         scenes: MY_SCENES.join(","), user_agent: navigator.userAgent });
+  consent();
+});
 </script>
 </body>
 </html>

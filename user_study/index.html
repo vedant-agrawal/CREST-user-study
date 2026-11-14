@@ -104,7 +104,8 @@ const CONFIG = {
     { key: "faithful",  text: "Which video better follows the reference video: the same scene, and the same construction progress at each moment?" },
   ],
 };
-const src = (scene, method) => `videos/${scene}/${method}.mp4`;
+// 2026-11-13: half frame rate, same frames (sweeps 12 fps, A 3 fps, all 16.33 s); the 24/6 fps originals stay in videos/
+const src = (scene, method) => `videos_halffps/${scene}/${method}.mp4`;
 /* ============================================================== */
 
 const params = new URLSearchParams(location.search);
@@ -115,9 +116,25 @@ const app = document.getElementById("app");
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function sides(x, y) { return Math.random() < 0.5 ? [x, y] : [y, x]; }
 
-const POOL = shuffle([...CONFIG.SCENES]);
-const MY_SCENES = POOL.slice(0, CONFIG.SCENES_PER_PARTICIPANT);              // this participant's scenes
-const PRACTICE_SCENE = POOL[CONFIG.SCENES_PER_PARTICIPANT] || POOL[0];        // a scene they do not get in the study
+// Balanced scene assignment (2026-11-13): collect.gs doGet returns the SCENES_PER_PARTICIPANT least-loaded scenes
+// (answered + recent unfinished assignments; a reload gets the same scenes). If the request fails or takes > 6 s,
+// fall back to a uniform random draw. Every row logs which was used (assign = "server" | "random").
+let MY_SCENES = [], PRACTICE_SCENE = "", ASSIGN = "random";
+async function assignScenes() {
+  const n = CONFIG.SCENES_PER_PARTICIPANT;
+  if (CONFIG.ENDPOINT.startsWith("http")) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const q = new URLSearchParams({ action: "assign", pid: PID, n, scenes: CONFIG.SCENES.join(",") });
+      const got = (await (await fetch(`${CONFIG.ENDPOINT}?${q}`, { signal: ctl.signal })).json()).scenes;
+      if (Array.isArray(got) && got.length === n && got.every(s => CONFIG.SCENES.includes(s))) { MY_SCENES = got; ASSIGN = "server"; }
+    } catch (err) { console.warn("scene assignment failed, using random scenes", err); }
+    clearTimeout(timer);
+  }
+  if (ASSIGN !== "server") MY_SCENES = shuffle([...CONFIG.SCENES]).slice(0, n);
+  const rest = CONFIG.SCENES.filter(s => !MY_SCENES.includes(s));            // practice in a scene they do not get
+  PRACTICE_SCENE = rest.length ? rest[Math.floor(Math.random() * rest.length)] : CONFIG.SCENES[0];
+}
 
 function buildTrials() {
   const main = [];
@@ -133,7 +150,7 @@ function buildTrials() {
   return main;
 }
 
-const state = { trials: buildTrials(), idx: 0, started: Date.now() };
+const state = { trials: [], idx: 0, started: Date.now() };   // trials are built after assignScenes()
 
 function send(row) {
   if (!CONFIG.ENDPOINT.startsWith("http")) { console.log("ROW (no endpoint set)", row); return; }
@@ -267,7 +284,7 @@ function trialScreen(trial, number) {
       send({
         pid: PID, session: SESSION, trial_index: number, trial_id: trial.id, scene: trial.scene, kind: trial.kind,
         left_method: trial.left, right_method: trial.right, ...Object.fromEntries(CONFIG.QUESTIONS.map(q => ["q_" + q.key, chosen[q.key]])),
-        check_passed: check,
+        check_passed: check, assign: ASSIGN,
         rt_ms: Math.round(performance.now() - t0), plays, speed_end: rate, speed_max: maxRate, user_agent: navigator.userAgent,
       });
     }
@@ -280,7 +297,8 @@ function trialScreen(trial, number) {
 function showTrial() { window.scrollTo(0, 0); trialScreen(state.trials[state.idx], state.idx + 1); }
 
 function done() {
-  send({ pid: PID, session: SESSION, trial_index: "", trial_id: "_complete", kind: "complete",
+  send({ pid: PID, session: SESSION, trial_index: "", trial_id: "_complete", kind: "complete", assign: ASSIGN,
+         scenes: MY_SCENES.join(","),
          rt_ms: Date.now() - state.started, user_agent: navigator.userAgent });
   app.innerHTML = `
     <section class="panel">
@@ -289,7 +307,8 @@ function done() {
     </section>`;
 }
 
-consent();
+app.innerHTML = `<section class="panel"><p>Loading…</p></section>`;
+assignScenes().then(() => { state.trials = buildTrials(); consent(); });
 </script>
 </body>
 </html>
